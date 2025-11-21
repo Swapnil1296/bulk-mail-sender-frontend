@@ -4,7 +4,7 @@ import { Send, Briefcase, Code, CheckCircle, XCircle, AlertCircle } from 'lucide
 export default function BulkEmailSender() {
   const [emails, setEmails] = useState('');
   const [subject, setSubject] = useState('');
-  const [senderName, setSenderName] = useState('');
+  const [senderName, setSenderName] = useState('Swapnil Landage');
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState([]);
   const [serverHealth, setServerHealth] = useState(null);
