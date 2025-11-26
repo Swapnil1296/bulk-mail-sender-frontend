@@ -33,56 +33,120 @@ export default function BulkEmailSender() {
   
 
   const sendEmails = async (jobType) => {
-    const emailList = emails.split('\n').filter(e => e.trim());
-    const error = {...errorMessage};
+  const emailList = emails.split('\n').filter(e => e.trim());
+  const error = {...errorMessage};
+  
+  if (emailList.length === 0) {
+    error["emailList"] = "Please enter at least one email address";
+  }
+  if (!senderName) {
+    error["senderName"] = "Please enter your name";
+  }
+  if (Object.keys(error).length > 0) {
+    setErrorMessage(error);
+    return;
+  }
+
+  if (serverHealth && !serverHealth.resumes[jobType]?.exists) {
+    ShowPopup('Error!', `⚠️ ${jobType.toUpperCase()} resume not found!`);
+    return;
+  }
+
+  setLoading(true);
+  setResults([]);
+
+  try {
+    // Step 1: Start the bulk email job
+    const response = await fetch(`${import.meta.env.VITE_API_URL}/send-bulk-emails`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'X-API-Key': import.meta.env.VITE_API_KEY 
+      },
+      body: JSON.stringify({
+        emails: emailList,
+        jobType,
+        subject: subject || `Application for ${jobType === 'frontend' ? 'Frontend' : 'MERN Stack'} Developer Position`,
+        senderName: senderName || 'Applicant'
+      })
+    });
+
+    const data = await response.json();
     
-    if (emailList.length === 0) {
-      error["emailList"] = "Please enter at least one email address";
-    }
-    if (!senderName) {
-      error["senderName"] = "Please enter your name";
-    }
-    if (Object.keys(error).length > 0) {
-      setErrorMessage(error);
-      return;
-    }
-
-    if (serverHealth && !serverHealth.resumes[jobType]?.exists) {
-      ShowPopup('Error!', `⚠️ ${jobType.toUpperCase()} resume not found!`);
-      return;
-    }
-
-    setLoading(true);
-    setResults([]);
-
-    try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/send-bulk-emails`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json','X-API-Key': import.meta.env.VITE_API_KEY },
-        body: JSON.stringify({
-          emails: emailList,
-          jobType,
-          subject: subject || `Application for ${jobType === 'frontend' ? 'Frontend' : 'MERN Stack'} Developer Position`,
-          senderName: senderName || 'Applicant'
-        })
-      });
-
-      const data = await response.json();
-      
-      if (data?.status===200) {
-        setResults(data.results);
-        setAnimateResults(true);
-        setTimeout(() => setAnimateResults(false), 500);
-        ShowPopup('Success!', `✅ ${data.summary.success} out of ${data.summary.total} emails sent!`);
-      } else {
-        ShowPopup('Error!', `❌ Error: ${data.error}`);
-      }
-    } catch (error) {
-      console.error('Error sending emails:', error);
-    } finally {
+    if (!response.ok || !data.jobId) {
+      ShowPopup('Error!', `❌ Error: ${data.error || 'Failed to start email job'}`);
       setLoading(false);
+      return;
     }
-  };
+
+    // Show initial success message
+    ShowPopup('Processing...', `📧 Sending emails to ${data.totalEmails} recipients...`);
+
+    // Step 2: Poll for job status
+    const jobId = data.jobId;
+    let pollCount = 0;
+    const maxPolls = 120; // Maximum 4 minutes (2 seconds * 120)
+    
+    const pollInterval = setInterval(async () => {
+      pollCount++;
+      
+      try {
+        const statusResponse = await fetch(
+          `${import.meta.env.VITE_API_URL}/email-job-status/${jobId}`,
+          {
+            headers: { 'X-API-Key': import.meta.env.VITE_API_KEY }
+          }
+        );
+
+        const statusData = await statusResponse.json();
+
+        // Update results in real-time
+        if (statusData.results && statusData.results.length > 0) {
+          setResults(statusData.results);
+          setAnimateResults(true);
+          setTimeout(() => setAnimateResults(false), 500);
+        }
+
+        // Check if job is complete
+        if (statusData.status !== 'processing') {
+          clearInterval(pollInterval);
+          setLoading(false);
+
+          // Show final result
+          if (statusData.status === 'completed') {
+            ShowPopup('Success!', `✅ All ${statusData?.success} emails sent successfully!`);
+          } else if (statusData.status === 'partial') {
+            ShowPopup('Partial Success', `⚠️ ${statusData?.success} out of ${statusData?.total} emails sent. ${statusData.failed} failed.`);
+          } else {
+            ShowPopup('Failed', `❌ Failed to send emails. ${statusData.failed} errors occurred.`);
+          }
+
+          // Set final results
+          setResults(statusData.results);
+          return;
+        }
+
+        // Optional: Show progress updates
+        console.log(`Progress: ${statusData.processed}/${statusData.totalEmails} (${statusData.successful} successful, ${statusData.failed} failed)`);
+
+      } catch (pollError) {
+        console.error('Error polling job status:', pollError);
+      }
+
+      // Stop polling after max attempts
+      if (pollCount >= maxPolls) {
+        clearInterval(pollInterval);
+        setLoading(false);
+        ShowPopup('Timeout', '⏱️ Job is taking longer than expected. Please check status manually.');
+      }
+    }, 2000); // Poll every 2 seconds
+
+  } catch (error) {
+    console.error('Error sending emails:', error);
+    ShowPopup('Error!', `❌ Network error: ${error.message}`);
+    setLoading(false);
+  }
+};
 
   return (
     <div className="min-h-screen bg-black p-4 md:p-8 relative overflow-hidden">
